@@ -55,17 +55,24 @@ static struct {
 
 static int xmp_getattr(const char *path, struct stat *stbuf)
 {
-  char fullpath[PATH_MAX];
+  char fullpath[2][PATH_MAX];
 	int res;
 
-  sprintf(fullpath, "%s%s",
-      rand() % 2 == 0 ? global_context.driveA : global_context.driveB, path);
+	struct stat buf;
 
-  fprintf(stdout, "getattr: %s\n", fullpath);
+  sprintf(fullpath[0], "%s%s", global_context.driveA, path);
+  sprintf(fullpath[1], "%s%s", global_context.driveB, path);
 
-	res = lstat(fullpath, stbuf);
+	res = lstat(fullpath[0], stbuf);
 	if (res == -1)
 		return -errno;
+
+	res = lstat(fullpath[1], &buf);
+	if (res == -1)
+		return -errno;
+
+	if(S_ISREG(stbuf->st_mode))
+	  stbuf->st_size += buf.st_size;
 
 	return 0;
 }
@@ -387,24 +394,44 @@ static int xmp_open(const char *path, struct fuse_file_info *fi)
 static int xmp_read(const char *path, char *buf, size_t size, off_t offset,
     struct fuse_file_info *fi)
 {
-  char fullpath[PATH_MAX];
+  char fullpath[2][PATH_MAX];
   int fd;
-  int res;
+  int res = 0;
+  int i=0;
+  int stripe = 512;
+  int read=0;
 
-  sprintf(fullpath, "%s%s",
-      rand() % 2 == 0 ? global_context.driveA : global_context.driveB, path);
+  sprintf(fullpath[0], "%s%s", global_context.driveA, path);
+  sprintf(fullpath[1], "%s%s", global_context.driveB, path);
+
   fprintf(stdout, "read: %s\n", fullpath);
 
   (void) fi;
-  fd = open(fullpath, O_RDONLY);
-  if (fd == -1)
-    return -errno;
 
-  res = pread(fd, buf, size, offset);
-  if (res == -1)
-    res = -errno;
+  while(1){
+	
+    fd=open(fullpath[i%2], O_RDONLY);
 
-  close(fd);
+    if (fd == -1)
+      return -errno;
+
+    read = pread(fd, buf+i*stripe, stripe, offset);
+
+    if (read == -1)
+      read = -errno;
+    else if (read < 512 && read >= 0)
+      break;
+
+    close(fd);
+
+    res+=read;
+
+    if (i%2 == 1)
+      offset += 512;
+    
+    i++;
+
+  }
   return res;
 }
 
@@ -413,28 +440,44 @@ static int xmp_write(const char *path, const char *buf, size_t size,
 {
   char fullpaths[2][PATH_MAX];
   int fd;
-  int res;
-
+  int res = 0;
+  int remain = size;
+  int w_size = 0;
+  int write_sum = 0;
+  int i = 0;
   (void) fi;
 
   sprintf(fullpaths[0], "%s%s", global_context.driveA, path);
   sprintf(fullpaths[1], "%s%s", global_context.driveB, path);
 
-  for (int i = 0; i < 2; ++i) {
-    const char* fullpath = fullpaths[i];
-    fprintf(stdout, "write: %s\n", fullpath);
+  while (remain > 0) {
 
-    fd = open(fullpath, O_WRONLY);
+    if(remain < 512)
+      w_size = remain;
+    else
+      w_size = 512;
+
+    fd = open(fullpaths[i%2], O_WRONLY);
     if (fd == -1)
       return -errno;
 
-    res = pwrite(fd, buf, size, offset);
+    res = pwrite(fd, buf+write_sum, w_size, offset);
+    write_sum += res;
+
     if (res == -1)
       res = -errno;
 
     close(fd);
-  }
 
+    remain -= w_size;
+
+    if(i%2 == 1)
+      offset+=512;
+    i++;
+
+
+  }
+  res = write_sum;
   return res;
 }
 
@@ -532,13 +575,13 @@ static int xmp_setxattr(const char *path, const char *name, const char *value,
 static int xmp_getxattr(const char *path, const char *name, char *value,
     size_t size)
 {
-  char fullpath[PATH_MAX];
+  char fullpaths[2][PATH_MAX];
 
-  sprintf(fullpath, "%s%s",
-      rand() % 2 == 0 ? global_context.driveA : global_context.driveB, path);
+  sprintf(fullpaths[0], "%s%s", global_context.driveA, path);
+  sprintf(fullpaths[1], "%s%s", global_context.driveB, path);
 
-  fprintf(stdout, "getxattr: %s\n", fullpath);
-  int res = lgetxattr(fullpath, name, value, size);
+ 
+  int res = lgetxattr(fullpaths[0], name, value, size);
   if (res == -1)
     return -errno;
   return res;
@@ -546,13 +589,13 @@ static int xmp_getxattr(const char *path, const char *name, char *value,
 
 static int xmp_listxattr(const char *path, char *list, size_t size)
 {
-  char fullpath[PATH_MAX];
+  char fullpaths[2][PATH_MAX];
 
-  sprintf(fullpath, "%s%s",
-      rand() % 2 == 0 ? global_context.driveA : global_context.driveB, path);
-
-  fprintf(stdout, "listxattr: %s\n", fullpath);
-  int res = llistxattr(fullpath, list, size);
+  sprintf(fullpaths[0], "%s%s", global_context.driveA, path);
+  sprintf(fullpaths[1], "%s%s", global_context.driveB, path);
+ 
+ 
+  int res = llistxattr(fullpaths[0], list, size);
   if (res == -1)
     return -errno;
   return res;
@@ -619,8 +662,8 @@ int main(int argc, char *argv[])
     exit(1);
   }
 
-  strcpy(global_context.driveA, argv[--argc]);
   strcpy(global_context.driveB, argv[--argc]);
+  strcpy(global_context.driveA, argv[--argc]);
 
   srand(time(NULL));
 
