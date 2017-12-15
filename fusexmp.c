@@ -404,7 +404,6 @@ static int xmp_read(const char *path, char *buf, size_t size, off_t offset,
   sprintf(fullpath[0], "%s%s", global_context.driveA, path);
   sprintf(fullpath[1], "%s%s", global_context.driveB, path);
 
-  fprintf(stdout, "read: %s\n", fullpath);
 
   (void) fi;
 
@@ -419,7 +418,7 @@ static int xmp_read(const char *path, char *buf, size_t size, off_t offset,
 
     if (read == -1)
       read = -errno;
-    else if (read < 512 && read >= 0)
+    else if (read == 0)
       break;
 
     close(fd);
@@ -445,12 +444,13 @@ static int xmp_write(const char *path, const char *buf, size_t size,
   int w_size = 0;
   int write_sum = 0;
   int i = 0;
+  int writed =0;
   (void) fi;
 
   sprintf(fullpaths[0], "%s%s", global_context.driveA, path);
   sprintf(fullpaths[1], "%s%s", global_context.driveB, path);
 
-  while (remain > 0) {
+  for (i=0; i*512<size; i++) {
 
     if(remain < 512)
       w_size = remain;
@@ -461,20 +461,18 @@ static int xmp_write(const char *path, const char *buf, size_t size,
     if (fd == -1)
       return -errno;
 
-    res = pwrite(fd, buf+write_sum, w_size, offset);
-    write_sum += res;
+    writed = pwrite(fd, buf+write_sum, w_size, offset);
+    write_sum += writed;
 
-    if (res == -1)
+    if (writed == -1)
       res = -errno;
 
     close(fd);
 
-    remain -= w_size;
+    remain -= writed;
 
     if(i%2 == 1)
       offset+=512;
-    i++;
-
 
   }
   res = write_sum;
